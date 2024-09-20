@@ -1,0 +1,13 @@
+{
+  "name": "nats-queue",
+  "version": "0.0.1",
+  "description": "Queue over Nats",
+  "main": "dist/index.js",
+  "repository": "https://github.com/arusakov/node-nats-queue.git",
+  "author": "Aleksandr Rusakov <aleksandr.s.rusakov@gmail.com>",
+  "license": "MIT",
+  "devDependencies": {
+    "ts-node": "^10.9.2",
+    "typecript": "^0.0.1-security"
+  }
+}
