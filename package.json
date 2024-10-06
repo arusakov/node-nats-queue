@@ -8,7 +8,7 @@
   "license": "MIT",
   "scripts": {
     "build": "tsc -p .",
-    "compile": "tsc --noEmit -p ./test/",
+    "compile": "tsc --noEmit -p ./test",
     "lint": "eslint .",
     "test:all": "TS_NODE_PROJECT=test/tsconfig.json yarn test ./test/*.test.ts",
     "test:coverage": "c8 --reporter=lcovonly --reporter=text yarn test:all",
