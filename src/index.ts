@@ -100,6 +100,7 @@ export class Worker extends EventEmitter {
   protected readonly concurrency: number
   protected readonly limiter: Limiter
   protected readonly fetchInterval: number
+  protected readonly fetchTimeout: number
 
   protected consumer: Consumer | null = null
   protected running = false
@@ -115,6 +116,7 @@ export class Worker extends EventEmitter {
     this.concurrency = opts.concurrency || 1
 
     this.fetchInterval = 150
+    this.fetchTimeout = 3_000
     this.limiter = opts.rateLimit ?
       new FixedWindowLimiter(opts.rateLimit.max, opts.rateLimit.duration, this.fetchInterval) :
       new IntervalLimiter(this.fetchInterval)
@@ -154,6 +156,10 @@ export class Worker extends EventEmitter {
   }
 
   start() {
+    if (!this.consumer) {
+      throw new Error('call setup() before start()')
+    }
+
     if (!this.loopPromise) {
       this.running = true
       this.loopPromise = this.loop()
@@ -161,10 +167,6 @@ export class Worker extends EventEmitter {
   }
 
   protected async loop() {
-    if (!this.consumer) {
-      throw new Error('call setup() before start()')
-    }
-    
     while (this.running) {
       const max = this.limiter.get(this.concurrency - this.processingNow)
       const jobs = await this.fetch(max)
@@ -194,6 +196,7 @@ export class Worker extends EventEmitter {
     try {
       return this.consumer!.fetch({
         max_messages: count,
+        expires: this.fetchTimeout
       })
     } catch (e) {
       // TODO
