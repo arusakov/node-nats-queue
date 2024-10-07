@@ -16,6 +16,13 @@ jobs:
 
       - name: Install dependencies
         run: yarn --frozen-lockfile
+
+      - name: Install nats-server
+        uses: aricart/install-binary@v1.0.0
+        with:
+          repo: nats-io/nats-server
+          name: nats-server
+          cache: true
       
       - run: yarn compile
       - run: yarn test:coverage
