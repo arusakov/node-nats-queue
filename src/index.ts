@@ -1,8 +1,12 @@
-import { nanos, NatsError, type MsgHdrs } from '@nats-io/nats-core'
+import EventEmitter from 'events'
 
-import { type JetStreamClient, type Consumer, type JsMsg, AckPolicy } from '@nats-io/jetstream'
+import { AckPolicy } from '@nats-io/jetstream'
+import { nanos, NatsError } from '@nats-io/nats-core'
+import type { JetStreamClient, Consumer, JsMsg} from '@nats-io/jetstream'
+import type { MsgHdrs } from '@nats-io/nats-core'
 
-import { createSubject, timeout } from './utils'
+import { createSubject, sleep } from './utils'
+import { FixedWindowLimiter, IntervalLimiter, type Limiter } from './limiter'
 
 
 export type QueueOpts
@@ -76,31 +80,44 @@ export class Queue {
   }
 }
 
+export type RateLimit = {
+  duration: number
+  max: number
+}
+
 export type WorkerOpts = {
   client: JetStreamClient
   name: string
   processor: (job: JsMsg) => Promise<void>
   concurrency?: number
+  rateLimit?: RateLimit
 }
 
-export class Worker {
+export class Worker extends EventEmitter {
   protected readonly client: JetStreamClient
   protected readonly name: string
   protected readonly processor: (job: JsMsg) => Promise<void>
   protected readonly concurrency: number
+  protected readonly limiter: Limiter
+  protected readonly fetchInterval: number
 
   protected consumer: Consumer | null = null
   protected running = false
   protected processingNow = 0
-  protected stopPromise: Promise<void> | null = null
-
+  protected loopPromise: Promise<void> | null = null
 
   constructor(opts: WorkerOpts) {
+    super()
+
     this.client = opts.client
     this.name = opts.name
-
     this.processor = opts.processor
     this.concurrency = opts.concurrency || 1
+
+    this.fetchInterval = 150
+    this.limiter = opts.rateLimit ?
+      new FixedWindowLimiter(opts.rateLimit.max, opts.rateLimit.duration, this.fetchInterval) :
+      new IntervalLimiter(this.fetchInterval)
   }
 
   async setup() {
@@ -128,18 +145,18 @@ export class Worker {
   async stop() {
     this.running = false
 
-    if (this.stopPromise) {
-      await this.stopPromise
+    if (this.loopPromise) {
+      await this.loopPromise
     }
     while (this.processingNow > 0) {
-      await timeout(150)
+      await sleep(this.fetchInterval)
     }
   }
 
   start() {
-    if (!this.stopPromise) {
+    if (!this.loopPromise) {
       this.running = true
-      this.stopPromise = this.loop()
+      this.loopPromise = this.loop()
     }
   }
 
@@ -149,15 +166,15 @@ export class Worker {
     }
     
     while (this.running) {
-      const jobsForFetch = Math.min(this.concurrency - this.processingNow, this.concurrency)
-
-      const jobs = await this.fetch(jobsForFetch)
+      const max = this.limiter.get(this.concurrency - this.processingNow)
+      const jobs = await this.fetch(max)
 
       for await (const j of jobs) {
-        this.process(j) // without await
+        this.limiter.inc()
+        this.process(j) // without await!
       }
 
-      await timeout(150)
+      await sleep(this.limiter.timeout())
     }
   }
 
