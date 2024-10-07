@@ -6,7 +6,7 @@ import { jetstream } from '@nats-io/jetstream'
 import { NatsConnection } from '@nats-io/nats-core'
 import type { JetStreamClient, JetStreamManager } from '@nats-io/jetstream'
 
-import { Queue } from '../src'
+import { Queue, Worker } from '../src'
 
 describe('Queue.add()', () => {
   let connection: NatsConnection
@@ -23,11 +23,6 @@ describe('Queue.add()', () => {
     })
     client = jetstream(connection)
     manager = await client.jetstreamManager()
-
-    queue = new Queue({
-      client,
-      name: QUEUE_NAME_1,
-    })
   })
 
   beforeEach(async () => {

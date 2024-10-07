@@ -7,7 +7,8 @@ import { NatsConnection } from '@nats-io/nats-core'
 import type { JetStreamClient, JetStreamManager } from '@nats-io/jetstream'
 
 
-import { DEFAULT_DEDUPLICATE_WINDOW, Queue } from '../src'
+import { DEFAULT_DEDUPLICATE_WINDOW, Queue, Worker } from '../src'
+
 
 describe('Queue', () => {
   let connection: NatsConnection
@@ -49,7 +50,7 @@ describe('Queue', () => {
     equal(messages, 0)
   })
 
-  it('update', async () => {
+  it('create multiple', async () => {
     const queue1 = new Queue({
       client,
       name: NAME_1,
@@ -69,5 +70,21 @@ describe('Queue', () => {
     const { config: { name, subjects, duplicate_window } } = await stream.info()
 
     equal(duplicate_window, nanos(deduplicateWindow))
+  })
+
+  it('create after Worker', async () => {
+    const worker = new Worker({
+      client,
+      name: NAME_1,
+      processor: async () => {},
+    })
+    await worker.setup()
+
+    const queue = new Queue({
+      client,
+      name: NAME_1,
+      deduplicateWindow: 3_000,
+    })
+    await queue.setup()
   })
 })

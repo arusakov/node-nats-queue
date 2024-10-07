@@ -1,7 +1,8 @@
 import { nanos, NatsError, type MsgHdrs } from '@nats-io/nats-core'
 
 import { type JetStreamClient, type Consumer, type JsMsg, AckPolicy } from '@nats-io/jetstream'
-import { timeout } from './utils'
+
+import { createSubject, timeout } from './utils'
 
 
 export type QueueOpts
@@ -88,8 +89,10 @@ export class Worker {
   protected readonly processor: (job: JsMsg) => Promise<void>
   protected readonly concurrency: number
 
+  protected consumer: Consumer | null = null
   protected running = false
   protected processingNow = 0
+  protected stopPromise: Promise<void> | null = null
 
 
   constructor(opts: WorkerOpts) {
@@ -103,41 +106,59 @@ export class Worker {
   async setup() {
     const manager = await this.client.jetstreamManager()
 
-    await manager.streams.add({
-      name: this.name,
-      subjects: [`${this.name}.*`], 
-    })
+    try {
+      await manager.streams.add({
+        name: this.name,
+        subjects: [createSubject(this.name)],
+      })
+    } catch (e) {
+      if (!(e instanceof NatsError && e.api_error?.err_code === 10058)) {
+        throw e
+      }
+    }
 
-    const consumer = await manager.consumers.add(this.name, {
-      filter_subject: `${this.name}.*`,
+    await manager.consumers.add(this.name, {
       durable_name: this.name,
       ack_policy: AckPolicy.All,
     })
 
-    console.log(consumer)
+    this.consumer = await this.client.consumers.get(this.name, this.name)
   }
 
-  stop() {
+  async stop() {
     this.running = false
+
+    if (this.stopPromise) {
+      await this.stopPromise
+    }
+    while (this.processingNow > 0) {
+      await timeout(150)
+    }
   }
 
-  async start() {
-    
-    const consumer = await this.client.consumers.get(this.name, this.name)
+  start() {
+    if (!this.stopPromise) {
+      this.running = true
+      this.stopPromise = this.loop()
+    }
+  }
 
-    this.running = true
-    do {
+  protected async loop() {
+    if (!this.consumer) {
+      throw new Error('call setup() before start()')
+    }
+    
+    while (this.running) {
       const jobsForFetch = Math.min(this.concurrency - this.processingNow, this.concurrency)
 
-      const jobs = await this.fetch(consumer, jobsForFetch)
+      const jobs = await this.fetch(jobsForFetch)
 
       for await (const j of jobs) {
         this.process(j) // without await
       }
 
       await timeout(150)
-
-    } while (this.running)
+    }
   }
 
   protected async process(j: JsMsg) {
@@ -152,9 +173,9 @@ export class Worker {
     }
   }
 
-  protected async fetch(consumer: Consumer, count: number) {
+  protected async fetch(count: number) {
     try {
-      return consumer.fetch({
+      return this.consumer!.fetch({
         max_messages: count,
       })
     } catch (e) {
