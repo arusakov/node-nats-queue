@@ -1,10 +1,16 @@
-import { nanos, NatsConnection, NatsError, type MsgHdrs } from '@nats-io/nats-core'
+import EventEmitter from 'events'
 
-import type { JetStreamClient } from '@nats-io/jetstream'
-import { jetstreamManager } from '@nats-io/jetstream'
+import { AckPolicy } from '@nats-io/jetstream'
+import { nanos, NatsError } from '@nats-io/nats-core'
+import type { JetStreamClient, Consumer, JsMsg} from '@nats-io/jetstream'
+import type { MsgHdrs } from '@nats-io/nats-core'
+
+import { createSubject, sleep } from './utils'
+import { FixedWindowLimiter, IntervalLimiter, type Limiter } from './limiter'
 
 
-export type QueueOpts = {
+export type QueueOpts
+ = {
   client: JetStreamClient
   name: string
 
@@ -65,11 +71,136 @@ export class Queue {
     
   }
 
-  async add(name: string, data: unknown, options?: AddOptions) {
+  async add(name: string, data?: unknown, options?: AddOptions) {
     const payload = JSON.stringify(data)
     return this.client.publish(`${this.name}.${name}`, payload, options && {
       msgID: options.id, 
       headers: options.headers
     })
+  }
+}
+
+export type RateLimit = {
+  duration: number
+  max: number
+}
+
+export type WorkerOpts = {
+  client: JetStreamClient
+  name: string
+  processor: (job: JsMsg) => Promise<void>
+  concurrency?: number
+  rateLimit?: RateLimit
+}
+
+export class Worker extends EventEmitter {
+  protected readonly client: JetStreamClient
+  protected readonly name: string
+  protected readonly processor: (job: JsMsg) => Promise<void>
+  protected readonly concurrency: number
+  protected readonly limiter: Limiter
+  protected readonly fetchInterval: number
+  protected readonly fetchTimeout: number
+
+  protected consumer: Consumer | null = null
+  protected running = false
+  protected processingNow = 0
+  protected loopPromise: Promise<void> | null = null
+
+  constructor(opts: WorkerOpts) {
+    super()
+
+    this.client = opts.client
+    this.name = opts.name
+    this.processor = opts.processor
+    this.concurrency = opts.concurrency || 1
+
+    this.fetchInterval = 150
+    this.fetchTimeout = 3_000
+    this.limiter = opts.rateLimit ?
+      new FixedWindowLimiter(opts.rateLimit.max, opts.rateLimit.duration, this.fetchInterval) :
+      new IntervalLimiter(this.fetchInterval)
+  }
+
+  async setup() {
+    const manager = await this.client.jetstreamManager()
+
+    try {
+      await manager.streams.add({
+        name: this.name,
+        subjects: [createSubject(this.name)],
+      })
+    } catch (e) {
+      if (!(e instanceof NatsError && e.api_error?.err_code === 10058)) {
+        throw e
+      }
+    }
+
+    await manager.consumers.add(this.name, {
+      durable_name: this.name,
+      ack_policy: AckPolicy.All,
+    })
+
+    this.consumer = await this.client.consumers.get(this.name, this.name)
+  }
+
+  async stop() {
+    this.running = false
+
+    if (this.loopPromise) {
+      await this.loopPromise
+    }
+    while (this.processingNow > 0) {
+      await sleep(this.fetchInterval)
+    }
+  }
+
+  start() {
+    if (!this.consumer) {
+      throw new Error('call setup() before start()')
+    }
+
+    if (!this.loopPromise) {
+      this.running = true
+      this.loopPromise = this.loop()
+    }
+  }
+
+  protected async loop() {
+    while (this.running) {
+      const max = this.limiter.get(this.concurrency - this.processingNow)
+      const jobs = await this.fetch(max)
+
+      for await (const j of jobs) {
+        this.limiter.inc()
+        this.process(j) // without await!
+      }
+
+      await sleep(this.limiter.timeout())
+    }
+  }
+
+  protected async process(j: JsMsg) {
+    this.processingNow += 1
+    try {
+      this.process(j)
+      await j.ackAck()
+    } catch (e) {
+      await j.term()
+    } finally {
+      this.processingNow -= 1
+    }
+  }
+
+  protected async fetch(count: number) {
+    try {
+      return this.consumer!.fetch({
+        max_messages: count,
+        expires: this.fetchTimeout
+      })
+    } catch (e) {
+      // TODO
+      return []
+    }
   }
 }
