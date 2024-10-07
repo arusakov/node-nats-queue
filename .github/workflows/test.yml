@@ -24,7 +24,7 @@ jobs:
           name: nats-server
           cache: true
       
-      - run: nats -js &
+      - run: nats-server -js &
       
       - run: yarn compile
       - run: yarn test:coverage
