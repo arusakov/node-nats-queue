@@ -1,6 +1,6 @@
 {
   "name": "nats-queue",
-  "version": "0.0.1",
+  "version": "",
   "description": "Queue over Nats",
   "main": "dist/index.js",
   "repository": "https://github.com/arusakov/node-nats-queue.git",
