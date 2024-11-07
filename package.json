@@ -6,6 +6,9 @@
   "repository": "https://github.com/arusakov/node-nats-queue.git",
   "author": "Aleksandr Rusakov <aleksandr.s.rusakov@gmail.com>",
   "license": "MIT",
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc -p .",
     "compile": "tsc --noEmit -p ./test",
